@@ -45,10 +45,24 @@ def load_alerts():
     try:
         if os.path.exists(ALERTS_FILE):
             with open(ALERTS_FILE, 'r') as f:
-                # Convert string keys back to integers
+                # Convert string keys back to integers and handle both old and new formats
                 data = json.load(f)
-                price_alerts = {int(k): {int(u): float(p) for u, p in v.items()} 
-                              for k, v in data.items()}
+                price_alerts = {}
+                for subnet_id, alerts in data.items():
+                    price_alerts[int(subnet_id)] = {}
+                    for user_id, alert_data in alerts.items():
+                        if isinstance(alert_data, dict):
+                            # New format
+                            price_alerts[int(subnet_id)][int(user_id)] = {
+                                'target_price': float(alert_data['target_price']),
+                                'initial_price': float(alert_data['initial_price'])
+                            }
+                        else:
+                            # Old format - convert to new format
+                            price_alerts[int(subnet_id)][int(user_id)] = {
+                                'target_price': float(alert_data),
+                                'initial_price': float(alert_data)  # Use target as initial for old alerts
+                            }
             print(f"Loaded {len(price_alerts)} alerts from {ALERTS_FILE}")
             
         if os.path.exists(HISTORY_FILE):
@@ -99,41 +113,101 @@ async def check_subnet_prices():
                 print(f"Subnet {subnet_uid} current price: {current_price}")
                 
                 # Check alerts for this subnet
-                for user_id, target_price in price_alerts[subnet_uid].items():
-                    print(f"Checking alert for user {user_id}: target {target_price}, current {current_price}")
-                    if current_price >= target_price:
-                        print(f"Alert triggered for subnet {subnet_uid}!")
-                        channel = bot.get_channel(CHANNEL_ID)
-                        if channel:
-                            user = await bot.fetch_user(user_id)
-                            await channel.send(
-                                f"🚨 **Price Alert for Subnet {subnet_uid}** 🚨\n"
-                                f"Target Price: {target_price:.4f} τ\n"
-                                f"Current Price: {current_price:.4f} τ\n"
-                                f"Alert set by: {user.mention}"
-                            )
-                            
-                            # Add to alert history
-                            if subnet_uid not in alert_history:
-                                alert_history[subnet_uid] = []
-                            alert_history[subnet_uid].append({
-                                'user_id': user_id,
-                                'target_price': target_price,
-                                'triggered_price': current_price,
-                                'timestamp': datetime.now().isoformat()
-                            })
-                            
-                            # Remove the alert after triggering
-                            del price_alerts[subnet_uid][user_id]
-                            if not price_alerts[subnet_uid]:
-                                del price_alerts[subnet_uid]
-                            # Save alerts and history after removing triggered ones
-                            save_alerts()
-                            print(f"Alert removed and saved for subnet {subnet_uid}")
+                for user_id, user_alerts in price_alerts[subnet_uid].items():
+                    # Convert to list if it's not already (for backward compatibility)
+                    if not isinstance(user_alerts, list):
+                        user_alerts = [user_alerts]
+                    
+                    # Track which alerts to remove
+                    alerts_to_remove = []
+                    
+                    for alert_index, alert_data in enumerate(user_alerts):
+                        if isinstance(alert_data, dict):
+                            target_price = alert_data['target_price']
+                            initial_price = alert_data['initial_price']
                         else:
-                            print(f"Could not find channel {CHANNEL_ID}")
-                    else:
-                        print(f"Price not reached for subnet {subnet_uid}: {current_price} < {target_price}")
+                            # Handle old format
+                            target_price = alert_data
+                            initial_price = target_price
+                        
+                        print(f"Checking alert for user {user_id}: target {target_price}, current {current_price}")
+                        
+                        # Determine if we're watching for price increase or decrease
+                        is_watching_increase = target_price > initial_price
+                        
+                        # Check if price has crossed the target or equals it
+                        if (is_watching_increase and current_price >= target_price) or \
+                           (not is_watching_increase and current_price <= target_price) or \
+                           (current_price == target_price):
+                            print(f"Alert triggered for subnet {subnet_uid}!")
+                            
+                            # Try to send to alert channel first
+                            alert_channel = bot.get_channel(CHANNEL_ID)
+                            message_sent = False
+                            
+                            if alert_channel:
+                                try:
+                                    user = await bot.fetch_user(user_id)
+                                    direction = "increased" if is_watching_increase else "decreased"
+                                    if current_price == target_price:
+                                        direction = "matched"
+                                    
+                                    await alert_channel.send(
+                                        f"🚨 **Price Alert for Subnet {subnet_uid}** 🚨\n"
+                                        f"Target Price: {target_price:.4f} τ\n"
+                                        f"Current Price: {current_price:.4f} τ\n"
+                                        f"Price has {direction} from {initial_price:.4f} τ\n"
+                                        f"Alert set by: {user.mention}"
+                                    )
+                                    message_sent = True
+                                except discord.Forbidden:
+                                    print(f"Bot does not have permission to send messages in alert channel {CHANNEL_ID}")
+                            
+                            # If alert channel failed, try to DM the user
+                            if not message_sent:
+                                try:
+                                    user = await bot.fetch_user(user_id)
+                                    await user.send(
+                                        f"🚨 **Price Alert for Subnet {subnet_uid}** 🚨\n"
+                                        f"Target Price: {target_price:.4f} τ\n"
+                                        f"Current Price: {current_price:.4f} τ\n"
+                                        f"Price has {direction} from {initial_price:.4f} τ\n"
+                                        f"I couldn't send this alert to the channel. Please check my permissions."
+                                    )
+                                    message_sent = True
+                                except:
+                                    print(f"Could not send DM to user {user_id}")
+                            
+                            if message_sent:
+                                # Add to alert history
+                                if subnet_uid not in alert_history:
+                                    alert_history[subnet_uid] = []
+                                alert_history[subnet_uid].append({
+                                    'user_id': user_id,
+                                    'target_price': target_price,
+                                    'initial_price': initial_price,
+                                    'triggered_price': current_price,
+                                    'direction': direction,
+                                    'timestamp': datetime.now().isoformat()
+                                })
+                                
+                                # Mark this alert for removal
+                                alerts_to_remove.append(alert_index)
+                            else:
+                                print(f"Price not reached for subnet {subnet_uid}: {current_price} {'<' if is_watching_increase else '>'} {target_price}")
+                    
+                    # Remove triggered alerts in reverse order to maintain indices
+                    for index in sorted(alerts_to_remove, reverse=True):
+                        del price_alerts[subnet_uid][user_id][index]
+                    
+                    # If no alerts left for this user in this subnet, clean up
+                    if not price_alerts[subnet_uid][user_id]:
+                        del price_alerts[subnet_uid][user_id]
+                        if not price_alerts[subnet_uid]:
+                            del price_alerts[subnet_uid]
+                    
+                    # Save alerts and history after processing all alerts
+                    save_alerts()
             except Exception as e:
                 print(f"Error checking subnet {subnet_uid}: {e}")
                 continue
@@ -163,39 +237,84 @@ async def set_alert(ctx, subnet_uid: int, target_price: float):
         print(f"Setting alert for subnet {subnet_uid} with target price {target_price}")
         # Validate subnet exists
         try:
+            # First check if subnet exists
             subnet_info = subtensor.subnet(subnet_uid)
-            if not subnet_info:
-                await ctx.send(f"❌ Subnet {subnet_uid} does not exist!")
+            if subnet_info is None:
+                print(f"Subnet {subnet_uid} returned None")
+                await ctx.send(f"❌ {ctx.author.mention} Subnet {subnet_uid} does not exist!")
                 return
-            current_price = float(subnet_info.price)
-            print(f"Current price for subnet {subnet_uid}: {current_price}")
+                
+            # Try to get the price to verify subnet is active
+            try:
+                current_price = float(subnet_info.price)
+                print(f"Current price for subnet {subnet_uid}: {current_price}")
+            except Exception as e:
+                print(f"Error getting price for subnet {subnet_uid}: {e}")
+                await ctx.send(f"❌ {ctx.author.mention} Could not get price for subnet {subnet_uid}. It might be inactive.")
+                return
+            
+            # If target price equals current price, send alert immediately to the command channel
+            if target_price == current_price:
+                await ctx.send(
+                    f"🚨 **Price Alert for Subnet {subnet_uid}** 🚨\n"
+                    f"Target Price: {target_price:.4f} τ\n"
+                    f"Current Price: {current_price:.4f} τ\n"
+                    f"Price matched target price immediately!\n"
+                    f"Alert set by: {ctx.author.mention}"
+                )
+                
+                # Add to alert history
+                if subnet_uid not in alert_history:
+                    alert_history[subnet_uid] = []
+                alert_history[subnet_uid].append({
+                    'user_id': ctx.author.id,
+                    'target_price': target_price,
+                    'initial_price': current_price,
+                    'triggered_price': current_price,
+                    'direction': 'matched',
+                    'timestamp': datetime.now().isoformat()
+                })
+                save_alerts()  # Save the history
+                return
+                    
         except Exception as e:
-            print(f"Error validating subnet: {e}")
-            await ctx.send(f"❌ Subnet {subnet_uid} does not exist!")
+            print(f"Error validating subnet {subnet_uid}: {e}")
+            await ctx.send(f"❌ {ctx.author.mention} Error validating subnet {subnet_uid}: {str(e)}")
             return
             
         # Initialize alerts for this subnet if needed
         if subnet_uid not in price_alerts:
             price_alerts[subnet_uid] = {}
             
-        # Add or update alert
-        price_alerts[subnet_uid][ctx.author.id] = target_price
+        # Initialize user's alerts for this subnet if needed
+        if ctx.author.id not in price_alerts[subnet_uid]:
+            price_alerts[subnet_uid][ctx.author.id] = []
+            
+        # Add new alert to user's alerts for this subnet
+        price_alerts[subnet_uid][ctx.author.id].append({
+            'target_price': target_price,
+            'initial_price': current_price
+        })
+        
         # Save alerts after adding new one
         save_alerts()
         print(f"Alert saved: {price_alerts}")
         
+        # Determine alert type
+        alert_type = "increase" if target_price > current_price else "decrease"
+        
         await ctx.send(
-            f"✅ Alert set for Subnet {subnet_uid}!\n"
+            f"✅ {ctx.author.mention} Alert set for Subnet {subnet_uid}!\n"
             f"Current Price: {current_price:.4f} τ\n"
             f"Target Price: {target_price:.4f} τ\n"
-            f"You will be notified when the price reaches or exceeds this value."
+            f"Alert Type: Price {alert_type}\n"
+            f"You will be notified when the price {alert_type}s to this value."
         )
     except Exception as e:
         print(f"Error setting alert: {e}")
-        await ctx.send(f"❌ Error setting alert: {e}")
+        await ctx.send(f"❌ {ctx.author.mention} Error setting alert: {e}")
 
 @bot.command(name='myalerts')
-@commands.cooldown(1, 2, commands.BucketType.user)  # 5 second cooldown per user
 async def list_alerts(ctx):
     """List all alerts set by the user"""
     try:
@@ -205,16 +324,36 @@ async def list_alerts(ctx):
                 # Get subnet info for the name
                 subnet_info = subtensor.subnet(subnet_uid)
                 subnet_name = subnet_info.subnet_name if subnet_info else "Unknown"
-                user_alerts.append(f"Subnet {subnet_uid} ({subnet_name}): {alerts[ctx.author.id]:.4f} τ")
+                
+                # Get all alerts for this subnet
+                subnet_alerts = []
+                for alert_data in alerts[ctx.author.id]:
+                    if isinstance(alert_data, dict):
+                        target_price = alert_data['target_price']
+                        initial_price = alert_data['initial_price']
+                    else:
+                        # Handle old format
+                        target_price = alert_data
+                        initial_price = target_price
+                    
+                    alert_type = "increase" if target_price > initial_price else "decrease"
+                    
+                    subnet_alerts.append(
+                        f"  - Target: {target_price:.4f} τ\n"
+                        f"    Initial: {initial_price:.4f} τ\n"
+                        f"    Type: Price {alert_type}"
+                    )
+                
+                if subnet_alerts:
+                    user_alerts.append(
+                        f"Subnet {subnet_uid} ({subnet_name}):\n" + "\n".join(subnet_alerts)
+                    )
         
         if not user_alerts:
             await ctx.send(f"{ctx.author.mention} You have no active price alerts.")
         else:
-            message = f"{ctx.author.mention} **Your Active Price Alerts**\n\n" + "\n".join(user_alerts)
+            message = f"{ctx.author.mention} **Your Active Price Alerts**\n\n" + "\n\n".join(user_alerts)
             await ctx.send(message)
-    except commands.CommandOnCooldown:
-        # Don't send any message if command is on cooldown
-        return
     except Exception as e:
         await ctx.send(f"❌ {ctx.author.mention} Error listing alerts: {e}")
 
@@ -256,7 +395,9 @@ async def show_alert_history(ctx, subnet_uid: int = None):
                 message += (
                     f"• {timestamp} - {user.mention}\n"
                     f"  Target: {alert['target_price']:.4f} τ | "
+                    f"Initial: {alert['initial_price']:.4f} τ | "
                     f"Triggered at: {alert['triggered_price']:.4f} τ\n"
+                    f"Direction: {alert['direction']}\n"
                 )
         else:
             # Show history for all subnets
@@ -269,7 +410,9 @@ async def show_alert_history(ctx, subnet_uid: int = None):
                     message += (
                         f"• {timestamp} - {user.mention}\n"
                         f"  Target: {alert['target_price']:.4f} τ | "
+                        f"Initial: {alert['initial_price']:.4f} τ | "
                         f"Triggered at: {alert['triggered_price']:.4f} τ\n"
+                        f"Direction: {alert['direction']}\n"
                     )
                 message += "\n"
         
@@ -293,13 +436,20 @@ async def get_subnet_price(ctx, subnet_uid: int):
         print(f"Getting price for subnet {subnet_uid} (requested by {ctx.author.name})")
         # Get subnet info
         subnet_info = subtensor.subnet(subnet_uid)
-        if not subnet_info:
+        if subnet_info is None:
+            print(f"Subnet {subnet_uid} returned None")
             await ctx.send(f"❌ {ctx.author.mention} Subnet {subnet_uid} does not exist!")
             return
             
-        current_price = float(subnet_info.price)
-        subnet_name = subnet_info.subnet_name
-        
+        try:
+            current_price = float(subnet_info.price)
+            subnet_name = subnet_info.subnet_name
+            print(f"Successfully got price for subnet {subnet_uid}: {current_price}")
+        except Exception as e:
+            print(f"Error getting price for subnet {subnet_uid}: {e}")
+            await ctx.send(f"❌ {ctx.author.mention} Could not get price for subnet {subnet_uid}. It might be inactive.")
+            return
+            
         # Format the message
         message = (
             f"**Subnet {subnet_uid} ({subnet_name})**\n"
