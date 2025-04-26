@@ -1,6 +1,6 @@
 # Bittensor Subnet Alerts Bot
 
-A Discord bot that monitors Bittensor subnet prices and sends alerts when prices reach specified targets. The bot supports multiple alerts per subnet, price history tracking, and immediate notifications.
+A Discord bot that monitors Bittensor subnet prices and sends alerts via DM when prices reach specified targets. The bot supports multiple alerts per subnet, price history tracking, and immediate notifications.
 
 ## Features
 
@@ -8,11 +8,13 @@ A Discord bot that monitors Bittensor subnet prices and sends alerts when prices
 - **Multiple Alerts**: Set multiple price alerts for the same subnet
 - **Price History**: Track and view alert history for all subnets
 - **Immediate Alerts**: Get instant notifications when prices match your target
-- **User Tagging**: Get mentioned in all alert-related messages
+- **DM Notifications**: Receive price alerts directly in your DMs
 - **Flexible Alert Types**: Set alerts for both price increases and decreases
 - **Detailed Information**: View current prices, market caps, and subnet details
 
 ## Commands
+
+All commands are used in the public channel:
 
 ### Price Commands
 - `!price <subnet_id>` - Get current price and details for a specific subnet
@@ -22,6 +24,7 @@ A Discord bot that monitors Bittensor subnet prices and sends alerts when prices
   - Example: `!setalert 0 1.0` - Alert when subnet 0 reaches 1.0 τ
   - You can set multiple alerts for the same subnet
   - Alerts trigger immediately if the current price matches your target
+  - You will receive alerts via DM when prices are reached
 - `!myalerts` - List all your active price alerts
 - `!removealert <subnet_id>` - Remove all your alerts for a specific subnet
 - `!alert_history [subnet_id]` - View alert history (optionally filtered by subnet)
@@ -33,6 +36,14 @@ The bot supports two types of alerts:
 2. **Price Decrease Alerts**: Trigger when price falls to or below your target
 
 The alert type is automatically determined based on your target price relative to the current price.
+
+## Alert Notifications
+
+- All price alerts are sent directly to your DMs
+- You'll receive a DM when:
+  - Price reaches your target
+  - Price matches your target immediately when setting the alert
+- Command responses and confirmations remain in the public channel
 
 ## Alert History
 
@@ -57,10 +68,9 @@ cd bittensor-subnet-alerts
 pip install -r requirements.txt
 ```
 
-3. Create a `.env` file with your Discord bot token and channel ID:
+3. Create a `.env` file with your Discord bot token:
 ```env
 DISCORD_TOKEN=your_discord_bot_token
-CHANNEL_ID=your_alert_channel_id
 ```
 
 4. Run the bot:
