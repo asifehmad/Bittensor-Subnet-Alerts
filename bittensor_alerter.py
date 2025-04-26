@@ -17,6 +17,8 @@ load_dotenv()
 
 # Discord bot setup
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
+ALLOWED_SERVER_ID = int(os.getenv('ALLOWED_SERVER_ID'))
+COMMAND_CHANNEL_ID = int(os.getenv('COMMAND_CHANNEL_ID'))
 
 # Initialize Discord bot
 intents = discord.Intents.default()
@@ -194,6 +196,14 @@ async def check_subnet_prices():
     except Exception as e:
         print(f"Error checking subnet prices: {e}")
 
+def is_command_channel():
+    """Check if the command is being used in the designated command channel"""
+    async def predicate(ctx):
+        if ctx.guild is None:  # If command is used in DMs
+            return False
+        return ctx.guild.id == ALLOWED_SERVER_ID and ctx.channel.id == COMMAND_CHANNEL_ID
+    return commands.check(predicate)
+
 @bot.event
 async def on_ready():
     print(f'Bot is ready. Logged in as {bot.user.name}')
@@ -209,7 +219,22 @@ async def on_ready():
         schedule.run_pending()
         await asyncio.sleep(1)
 
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CheckFailure):
+        if ctx.guild is None:  # If in DMs
+            return  # Don't send message in DMs
+        elif ctx.guild.id != ALLOWED_SERVER_ID:
+            await ctx.send("❌ This bot can only be used in the specified server.")
+        elif ctx.channel.id != COMMAND_CHANNEL_ID:
+            await ctx.send(f"❌ Commands can only be used in the designated command channel.")
+        else:
+            await ctx.send("❌ An error occurred while processing your command.")
+    else:
+        print(f"Error: {error}")
+
 @bot.command(name='setalert')
+@is_command_channel()
 async def set_alert(ctx, subnet_uid: int, target_price: float):
     """Set a price alert for a specific subnet"""
     try:
@@ -297,6 +322,7 @@ async def set_alert(ctx, subnet_uid: int, target_price: float):
         await ctx.send(f"❌ {ctx.author.mention} Error setting alert: {e}")
 
 @bot.command(name='myalerts')
+@is_command_channel()
 async def list_alerts(ctx):
     """List all alerts set by the user"""
     try:
@@ -340,6 +366,7 @@ async def list_alerts(ctx):
         await ctx.send(f"❌ {ctx.author.mention} Error listing alerts: {e}")
 
 @bot.command(name='removealert')
+@is_command_channel()
 async def remove_alert(ctx, subnet_uid: int):
     """Remove a price alert for a specific subnet"""
     try:
@@ -356,6 +383,7 @@ async def remove_alert(ctx, subnet_uid: int):
         await ctx.send(f"❌ Error removing alert: {e}")
 
 @bot.command(name='alert_history')
+@is_command_channel()
 async def show_alert_history(ctx, subnet_uid: int = None):
     """Show alert history for a specific subnet or all subnets"""
     try:
@@ -412,6 +440,7 @@ async def show_alert_history(ctx, subnet_uid: int = None):
         await ctx.send(f"❌ Error showing alert history: {e}")
 
 @bot.command(name='price')
+@is_command_channel()
 async def get_subnet_price(ctx, subnet_uid: int):
     """Get current price of a specific subnet"""
     try:
