@@ -45,36 +45,56 @@ def load_alerts():
     """Load alerts from JSON file"""
     global price_alerts, alert_history
     try:
+        # Load price alerts
         if os.path.exists(ALERTS_FILE):
             with open(ALERTS_FILE, 'r') as f:
-                # Convert string keys back to integers and handle both old and new formats
                 data = json.load(f)
                 price_alerts = {}
                 for subnet_id, alerts in data.items():
                     price_alerts[int(subnet_id)] = {}
-                    for user_id, alert_data in alerts.items():
-                        if isinstance(alert_data, dict):
-                            # New format
-                            price_alerts[int(subnet_id)][int(user_id)] = {
-                                'target_price': float(alert_data['target_price']),
-                                'initial_price': float(alert_data['initial_price'])
-                            }
+                    for user_id, user_alerts in alerts.items():
+                        price_alerts[int(subnet_id)][int(user_id)] = []
+                        if isinstance(user_alerts, list):
+                            for alert in user_alerts:
+                                price_alerts[int(subnet_id)][int(user_id)].append({
+                                    'target_price': float(alert['target_price']),
+                                    'initial_price': float(alert['initial_price'])
+                                })
                         else:
-                            # Old format - convert to new format
-                            price_alerts[int(subnet_id)][int(user_id)] = {
-                                'target_price': float(alert_data),
-                                'initial_price': float(alert_data)  # Use target as initial for old alerts
-                            }
+                            # Handle old format
+                            price_alerts[int(subnet_id)][int(user_id)].append({
+                                'target_price': float(user_alerts),
+                                'initial_price': float(user_alerts)
+                            })
             print(f"Loaded {len(price_alerts)} alerts from {ALERTS_FILE}")
+            print(f"Alert details: {price_alerts}")
+        else:
+            print(f"No existing alerts file found at {ALERTS_FILE}")
             
+        # Load alert history
         if os.path.exists(HISTORY_FILE):
             with open(HISTORY_FILE, 'r') as f:
-                # Convert string keys back to integers
                 data = json.load(f)
-                alert_history = {int(k): v for k, v in data.items()}
+                alert_history = {}
+                for subnet_id, history in data.items():
+                    alert_history[int(subnet_id)] = []
+                    for alert in history:
+                        alert_history[int(subnet_id)].append({
+                            'user_id': int(alert['user_id']),
+                            'target_price': float(alert['target_price']),
+                            'initial_price': float(alert['initial_price']),
+                            'triggered_price': float(alert['triggered_price']),
+                            'direction': alert['direction'],
+                            'timestamp': alert['timestamp']
+                        })
             print(f"Loaded alert history from {HISTORY_FILE}")
+            print(f"History details: {alert_history}")
+        else:
+            print(f"No existing history file found at {HISTORY_FILE}")
+            
     except Exception as e:
         print(f"Error loading alerts/history: {e}")
+        print(f"Raw data: {data if 'data' in locals() else 'No data loaded'}")
         price_alerts = {}
         alert_history = {}
 
