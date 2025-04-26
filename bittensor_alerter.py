@@ -17,11 +17,11 @@ load_dotenv()
 
 # Discord bot setup
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-CHANNEL_ID = int(os.getenv('CHANNEL_ID'))
 
 # Initialize Discord bot
 intents = discord.Intents.default()
 intents.message_content = True
+intents.dm_messages = True  # Enable DM messages
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Initialize Bittensor
@@ -141,44 +141,20 @@ async def check_subnet_prices():
                            (current_price == target_price):
                             print(f"Alert triggered for subnet {subnet_uid}!")
                             
-                            # Try to send to alert channel first
-                            alert_channel = bot.get_channel(CHANNEL_ID)
-                            message_sent = False
-                            
-                            if alert_channel:
-                                try:
-                                    user = await bot.fetch_user(user_id)
-                                    direction = "increased" if is_watching_increase else "decreased"
-                                    if current_price == target_price:
-                                        direction = "matched"
-                                    
-                                    await alert_channel.send(
-                                        f"🚨 **Price Alert for Subnet {subnet_uid}** 🚨\n"
-                                        f"Target Price: {target_price:.4f} τ\n"
-                                        f"Current Price: {current_price:.4f} τ\n"
-                                        f"Price has {direction} from {initial_price:.4f} τ\n"
-                                        f"Alert set by: {user.mention}"
-                                    )
-                                    message_sent = True
-                                except discord.Forbidden:
-                                    print(f"Bot does not have permission to send messages in alert channel {CHANNEL_ID}")
-                            
-                            # If alert channel failed, try to DM the user
-                            if not message_sent:
-                                try:
-                                    user = await bot.fetch_user(user_id)
-                                    await user.send(
-                                        f"🚨 **Price Alert for Subnet {subnet_uid}** 🚨\n"
-                                        f"Target Price: {target_price:.4f} τ\n"
-                                        f"Current Price: {current_price:.4f} τ\n"
-                                        f"Price has {direction} from {initial_price:.4f} τ\n"
-                                        f"I couldn't send this alert to the channel. Please check my permissions."
-                                    )
-                                    message_sent = True
-                                except:
-                                    print(f"Could not send DM to user {user_id}")
-                            
-                            if message_sent:
+                            try:
+                                user = await bot.fetch_user(user_id)
+                                direction = "increased" if is_watching_increase else "decreased"
+                                if current_price == target_price:
+                                    direction = "matched"
+                                
+                                # Send alert via DM
+                                await user.send(
+                                    f"🚨 **Price Alert for Subnet {subnet_uid}** 🚨\n"
+                                    f"Target Price: {target_price:.4f} τ\n"
+                                    f"Current Price: {current_price:.4f} τ\n"
+                                    f"Price has {direction} from {initial_price:.4f} τ"
+                                )
+                                
                                 # Add to alert history
                                 if subnet_uid not in alert_history:
                                     alert_history[subnet_uid] = []
@@ -193,8 +169,11 @@ async def check_subnet_prices():
                                 
                                 # Mark this alert for removal
                                 alerts_to_remove.append(alert_index)
-                            else:
-                                print(f"Price not reached for subnet {subnet_uid}: {current_price} {'<' if is_watching_increase else '>'} {target_price}")
+                            except Exception as e:
+                                print(f"Error sending DM to user {user_id}: {e}")
+                                continue
+                        else:
+                            print(f"Price not reached for subnet {subnet_uid}: {current_price} {'<' if is_watching_increase else '>'} {target_price}")
                     
                     # Remove triggered alerts in reverse order to maintain indices
                     for index in sorted(alerts_to_remove, reverse=True):
@@ -253,28 +232,31 @@ async def set_alert(ctx, subnet_uid: int, target_price: float):
                 await ctx.send(f"❌ {ctx.author.mention} Could not get price for subnet {subnet_uid}. It might be inactive.")
                 return
             
-            # If target price equals current price, send alert immediately to the command channel
+            # If target price equals current price, send alert immediately via DM
             if target_price == current_price:
-                await ctx.send(
-                    f"🚨 **Price Alert for Subnet {subnet_uid}** 🚨\n"
-                    f"Target Price: {target_price:.4f} τ\n"
-                    f"Current Price: {current_price:.4f} τ\n"
-                    f"Price matched target price immediately!\n"
-                    f"Alert set by: {ctx.author.mention}"
-                )
-                
-                # Add to alert history
-                if subnet_uid not in alert_history:
-                    alert_history[subnet_uid] = []
-                alert_history[subnet_uid].append({
-                    'user_id': ctx.author.id,
-                    'target_price': target_price,
-                    'initial_price': current_price,
-                    'triggered_price': current_price,
-                    'direction': 'matched',
-                    'timestamp': datetime.now().isoformat()
-                })
-                save_alerts()  # Save the history
+                try:
+                    await ctx.author.send(
+                        f"🚨 **Price Alert for Subnet {subnet_uid}** 🚨\n"
+                        f"Target Price: {target_price:.4f} τ\n"
+                        f"Current Price: {current_price:.4f} τ\n"
+                        f"Price matched target price immediately!"
+                    )
+                    
+                    # Add to alert history
+                    if subnet_uid not in alert_history:
+                        alert_history[subnet_uid] = []
+                    alert_history[subnet_uid].append({
+                        'user_id': ctx.author.id,
+                        'target_price': target_price,
+                        'initial_price': current_price,
+                        'triggered_price': current_price,
+                        'direction': 'matched',
+                        'timestamp': datetime.now().isoformat()
+                    })
+                    save_alerts()  # Save the history
+                except Exception as e:
+                    print(f"Error sending DM to user: {e}")
+                    await ctx.send(f"❌ {ctx.author.mention} I couldn't send you a DM. Please check your privacy settings.")
                 return
                     
         except Exception as e:
@@ -308,7 +290,7 @@ async def set_alert(ctx, subnet_uid: int, target_price: float):
             f"Current Price: {current_price:.4f} τ\n"
             f"Target Price: {target_price:.4f} τ\n"
             f"Alert Type: Price {alert_type}\n"
-            f"You will be notified when the price {alert_type}s to this value."
+            f"You will receive a DM when the price {alert_type}s to this value."
         )
     except Exception as e:
         print(f"Error setting alert: {e}")
