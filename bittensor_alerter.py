@@ -381,8 +381,17 @@ async def list_alerts(ctx):
             await ctx.send(f"{ctx.author.mention} You have no active price alerts.")
         else:
             message = f"{ctx.author.mention} **Your Active Price Alerts**\n\n" + "\n\n".join(user_alerts)
-            await ctx.send(message)
+            
+            # Split message if too long
+            if len(message) > 2000:
+                parts = [message[i:i+2000] for i in range(0, len(message), 2000)]
+                for part in parts:
+                    await ctx.send(part)
+                    await asyncio.sleep(0.5)  # Small delay between messages
+            else:
+                await ctx.send(message)
     except Exception as e:
+        print(f"Error listing alerts: {e}")
         await ctx.send(f"❌ {ctx.author.mention} Error listing alerts: {e}")
 
 @bot.command(name='removealert')
